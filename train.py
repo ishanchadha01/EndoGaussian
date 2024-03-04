@@ -106,6 +106,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         visibility_filter_list = []
         viewspace_point_tensor_list = []
         
+        # print(f'num of viewpoint cams {len(viewpoint_cams)}')
         for viewpoint_cam in viewpoint_cams:
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, stage=stage)
             image, depth, viewspace_point_tensor, visibility_filter, radii = \
@@ -122,7 +123,8 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             radii_list.append(radii.unsqueeze(0))
             visibility_filter_list.append(visibility_filter.unsqueeze(0))
             viewspace_point_tensor_list.append(viewspace_point_tensor)
-            
+            # print(f"printing individual img shapes {image.shape}, {gt_image.shape}")
+
         radii = torch.cat(radii_list,0).max(dim=0).values
         visibility_filter = torch.cat(visibility_filter_list).any(dim=0)
         rendered_images = torch.cat(images,0)
@@ -131,22 +133,37 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         gt_depths = torch.cat(gt_depths, 0)
         masks = torch.cat(masks, 0)
         
+        # print(f'rendered, gt, masks {rendered_images.shape} {gt_images.shape}, {masks.shape}')
         Ll1 = l1_loss(rendered_images, gt_images, masks)
         
         if (gt_depths!=0).sum() < 10:
+            print("no depth loss")
             depth_loss = torch.tensor(0.).cuda()
-        elif scene.mode == 'binocular':
-            rendered_depths[rendered_depths!=0] = 1 / rendered_depths[rendered_depths!=0]
-            gt_depths[gt_depths!=0] = 1 / gt_depths[gt_depths!=0]
-            depth_loss = l1_loss(rendered_depths, gt_depths, masks)
-        elif scene.mode == 'monocular':
-            rendered_depths_reshape = rendered_depths.reshape(-1, 1)
-            gt_depths_reshape = gt_depths.reshape(-1, 1)
-            mask_tmp = mask.reshape(-1)
-            rendered_depths_reshape, gt_depths_reshape = rendered_depths_reshape[mask_tmp!=0, :], gt_depths_reshape[mask_tmp!=0, :]
-            depth_loss =  0.001 * (1 - pearson_corrcoef(gt_depths_reshape, rendered_depths_reshape))
+        # elif scene.mode == 'binocular':
+        #     rendered_depths[rendered_depths!=0] = 1 / rendered_depths[rendered_depths!=0]
+        #     gt_depths[gt_depths!=0] = 1 / gt_depths[gt_depths!=0]
+        #     print("binocular")
+        #     try:
+        #         depth_loss = l1_loss(rendered_depths, gt_depths, masks)
+        #     except Exception as e:
+        #         print("depth_loss didn't work")
+        #         depth_loss = torch.tensor(0.).cuda()
+        # elif scene.mode == 'monocular':
         else:
-            raise ValueError(f"{scene.mode} is not implemented.")
+            # default to monocular for now bc scene mode param is weird
+            # print("monocular")
+            try:
+                rendered_depths_reshape = rendered_depths.reshape(-1, 1)
+                gt_depths_reshape = gt_depths.reshape(-1, 1)
+                mask_tmp = mask.reshape(-1)
+                rendered_depths_reshape, gt_depths_reshape = rendered_depths_reshape[mask_tmp!=0, :], gt_depths_reshape[mask_tmp!=0, :]
+                depth_loss =  0.001 * (1 - pearson_corrcoef(gt_depths_reshape, rendered_depths_reshape))
+            except Exception as e:
+                # print("depth loss monocular didnt work")
+                # print(e)
+                depth_loss = torch.tensor(0.).cuda()
+        # else:
+        #     raise ValueError(f"{scene.mode} is not implemented.")
         
         depth_tvloss = TV_loss(rendered_depths)
         img_tvloss = TV_loss(rendered_images)

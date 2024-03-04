@@ -51,8 +51,8 @@ class EndoNeRF_Dataset(object):
         mode='binocular'
     ):
         self.img_wh = (
-            int(640 / downsample),
-            int(512 / downsample),
+            int(1350 / downsample),
+            int(1080 / downsample),
         )
         self.root_dir = datadir
         self.downsample = downsample 
@@ -215,21 +215,32 @@ class EndoNeRF_Dataset(object):
         i, j = np.meshgrid(np.linspace(0, W-1, W), np.linspace(0, H-1, H))
         X_Z = (i-W/2) / self.focal[0]
         Y_Z = (j-H/2) / self.focal[1]
-        Z = depth
+        Z = depth[:,:,0]
+        # mask = mask[:,:,0]
+        # Z=depth
+        # X_Z = np.repeat(X_Z[:,:,np.newaxis], 3, axis=2)
+        # Y_Z = np.repeat(Y_Z[:,:,np.newaxis], 3, axis=2)
         X, Y = X_Z * Z, Y_Z * Z
-        pts_cam = np.stack((X, Y, Z), axis=-1).reshape(-1, 3)
-        color = color.reshape(-1, 3)
-        
+        pts_cam = np.stack((X, Y, Z), axis=-1)
+        # pts_cam = np.stack((X, Y, Z), axis=-1).reshape(-1, 3)
+        # color = color.reshape(-1, 3)
+        # print("printing pre mask shapes")
+        # print(mask.shape, pts_cam.shape, color.shape)
         if not disable_mask:
-            mask = mask.reshape(-1).astype(bool)
-            pts_valid = pts_cam[mask, :]
-            color_valid = color[mask, :]
+            # mask = mask.reshape(-1).astype(bool)
+            # pts_valid = pts_cam[mask, :]
+            pts_valid = np.where(mask, pts_cam, 0)
+            # color_valid = color[mask, :]
+            color_valid = np.where(mask, color, 0)
+            pts_valid = pts_valid.reshape(-1, 3) # points should not be in the shape of img
+            color_valid = color_valid.reshape(-1, 3) #these are colors of points, not colors in img
         else:
             mask = mask.reshape(-1).astype(bool)
             pts_valid = pts_cam
             color_valid = color
             color_valid[mask==0, :] = np.ones(3)
-                    
+        # print("printing shape of network inputs")
+        # print(pts_valid.shape, color_valid.shape, mask.shape)     
         return pts_valid, color_valid, mask
         
     def get_maxtime(self):

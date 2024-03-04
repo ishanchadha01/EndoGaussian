@@ -27,6 +27,7 @@ def lpips_loss(img1, img2, lpips_model):
     return loss.mean()
 
 def l1_loss(network_output, gt, mask=None):
+    print(f"printing output and gt shapes {network_output.shape} {gt.shape}")
     loss = torch.abs((network_output - gt))
     if mask is not None:
         if mask.ndim == 4:
