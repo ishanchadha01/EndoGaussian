@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 from scene.hexplane import HexPlaneField
+# from scene.hexplane import HexPlaneField, HashHexPlaneField
+# import tinycudann as tcnn
 
 class Deformation(nn.Module):
     def __init__(self, D=8, W=256, input_ch=27, input_ch_time=9, skips=[], args=None):
@@ -12,7 +14,9 @@ class Deformation(nn.Module):
         self.input_ch_time = input_ch_time
         self.skips = skips
         self.no_grid = args.no_grid
-        
+
+        # import pdb
+        # pdb.set_trace()
         self.grid = HexPlaneField(args.bounds, args.kplanes_config, args.multires)
         self.pos_deform, self.scales_deform, self.rotations_deform, self.opacity_deform = self.create_net()
         self.args = args
@@ -33,6 +37,48 @@ class Deformation(nn.Module):
             nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 3)),\
             nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 4)), \
             nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 1))
+
+        # ff_mlp1 = tcnn.Network(n_input_dims=self.W, 
+        #     n_output_dims=3, 
+        #     network_config={
+        #         "otype": "FullyFusedMLP",
+        #         "activation": "ReLU",
+        #         "output_activation": "None",
+        #         "n_neurons": self.W,
+        #         "n_hidden_layers": 2,
+        #     })
+
+        # ff_mlp2 = tcnn.Network(n_input_dims=self.W, 
+        #     n_output_dims=3, 
+        #     network_config={
+        #         "otype": "FullyFusedMLP",
+        #         "activation": "ReLU",
+        #         "output_activation": "None",
+        #         "n_neurons": self.W,
+        #         "n_hidden_layers": 2,
+        #     })
+
+        # ff_mlp3 = tcnn.Network(n_input_dims=self.W, 
+        #     n_output_dims=4, 
+        #     network_config={
+        #         "otype": "FullyFusedMLP",
+        #         "activation": "ReLU",
+        #         "output_activation": "None",
+        #         "n_neurons": self.W,
+        #         "n_hidden_layers": 2,
+        #     })
+
+        # ff_mlp4 = tcnn.Network(n_input_dims=self.W, 
+        #     n_output_dims=1, 
+        #     network_config={
+        #         "otype": "FullyFusedMLP",
+        #         "activation": "ReLU",
+        #         "output_activation": "None",
+        #         "n_neurons": self.W,
+        #         "n_hidden_layers": 2,
+        #     })
+
+        # return ff_mlp1, ff_mlp2, ff_mlp3, ff_mlp4
     
     def query_time(self, rays_pts_emb, scales_emb, rotations_emb, time_emb):
         if self.no_grid:
@@ -44,6 +90,8 @@ class Deformation(nn.Module):
         return h
 
     def forward(self, rays_pts_emb, scales_emb=None, rotations_emb=None, opacity = None, time_emb=None):
+        # import pdb
+        # pdb.set_trace()
         if time_emb is None:
             return self.forward_static(rays_pts_emb[:,:3])
         else:

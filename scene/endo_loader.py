@@ -23,7 +23,7 @@ import imageio.v2 as iio
 import cv2
 import torch
 import time
-
+import gc
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -65,9 +65,9 @@ class EndoNeRF_Dataset(object):
         print(f"meta data loaded, total image:{len(self.image_paths)}")
         
         n_frames = len(self.image_paths)
-        self.train_idxs = [i for i in range(n_frames) if (i-1) % test_every != 0]
-        self.test_idxs = [i for i in range(n_frames) if (i-1) % test_every == 0]
-        self.video_idxs = [i for i in range(n_frames)]
+        self.train_idxs = [i for i in range(n_frames) if (i-1) % test_every != 0][::2]#TODO temp fix for OOM error
+        self.test_idxs = [i for i in range(n_frames) if (i-1) % test_every == 0][::2]#TODO temp fix for OOM error
+        self.video_idxs = [i for i in range(n_frames)][::2]#TODO temp fix for OOM error
         
         self.maxtime = 1.0
         
@@ -76,7 +76,7 @@ class EndoNeRF_Dataset(object):
         Load meta data from the dataset.
         """
         # load poses
-        poses_arr = np.load(os.path.join(self.root_dir, "poses_bounds.npy"))
+        poses_arr = np.load(os.path.join(self.root_dir, "poses_bounds.npy"))[::2] #TODO temp fix for OOM error
         poses = poses_arr[:, :-2].reshape([-1, 3, 5])  # (N_cams, 3, 5)
         # coordinate transformation OpenGL->Colmap, center poses
         H, W, focal = poses[0, :, -1]
@@ -102,15 +102,15 @@ class EndoNeRF_Dataset(object):
         
         # get paths of images, depths, masks, etc.
         agg_fn = lambda filetype: sorted(glob.glob(os.path.join(self.root_dir, filetype, "*.png")))
-        self.image_paths = agg_fn("images")
+        self.image_paths = agg_fn("images")[::2] #TODO temp fix for OOM error
         if self.mode == 'binocular':
-            self.depth_paths = agg_fn("depth")
+            self.depth_paths = agg_fn("depth")[::2]#TODO temp fix for OOM error
         elif self.mode == 'monocular':
-            self.depth_paths = agg_fn("monodepth")
+            self.depth_paths = agg_fn("monodepth")[::2]#TODO temp fix for OOM error
         else:
             raise ValueError(f"{self.mode} has not been implemented.")
-        self.masks_paths = agg_fn("masks")
-
+        self.masks_paths = agg_fn("masks")[::2]#TODO temp fix for OOM error
+        print(len(self.image_paths), len(self.depth_paths), len(self.masks_paths), poses.shape[0])
         assert len(self.image_paths) == poses.shape[0], "the number of images should equal to the number of poses"
         assert len(self.depth_paths) == poses.shape[0], "the number of depth images should equal to number of poses"
         assert len(self.masks_paths) == poses.shape[0], "the number of masks should equal to the number of poses"
@@ -123,11 +123,15 @@ class EndoNeRF_Dataset(object):
         else:
             idxs = self.video_idxs
         
+        import tracemalloc
+        tracemalloc.start()
         for idx in tqdm(idxs):
             # mask / depth
             mask_path = self.masks_paths[idx]
-            mask = Image.open(mask_path)
-            mask = 1 - np.array(mask) / 255.0
+            # mask = Image.open(mask_path)
+            # mask = 1 - np.array(mask) / 255.0
+            with Image.open(mask_path) as mask_img:
+                mask = 1 - np.array(mask_img) / 255.0
             depth_path = self.depth_paths[idx]
             if self.mode == 'binocular':
                 depth = np.array(Image.open(depth_path))
@@ -135,16 +139,23 @@ class EndoNeRF_Dataset(object):
                 inf_depth = np.percentile(depth[depth!=0], 99.8)
                 depth = np.clip(depth, close_depth, inf_depth)
             elif self.mode == 'monocular':
-                depth = np.array(Image.open(self.depth_paths[idx]))[...,0] / 255.0
+                with Image.open(self.depth_paths[idx]) as depth_img:
+                    depth = np.array(depth_img)[...,0] / 255.0
                 depth[depth!=0] = (1 / depth[depth!=0])*0.4
                 depth[depth==0] = depth.max()
                 depth = depth[...,None]
             else:
                 raise ValueError(f"{self.mode} has not been implemented.")
+            # depth = torch.from_numpy(depth).cuda(non_blocking=True)
+            # mask = self.transform(mask).bool().cuda(non_blocking=True)
             depth = torch.from_numpy(depth)
             mask = self.transform(mask).bool()
+
+
             # color
-            color = np.array(Image.open(self.image_paths[idx]))/255.0
+            with Image.open(self.image_paths[idx]) as color_img:
+                color = np.array(color_img)/255.0
+            # image = self.transform(color).cuda(non_blocking=True)
             image = self.transform(color)
             # times           
             time = self.image_times[idx]
@@ -153,10 +164,23 @@ class EndoNeRF_Dataset(object):
             # fov
             FovX = focal2fov(self.focal[0], self.img_wh[0])
             FovY = focal2fov(self.focal[1], self.img_wh[1])
-            
+
             cameras.append(Camera(colmap_id=idx,R=R,T=T,FoVx=FovX,FoVy=FovY,image=image, depth=depth, mask=mask, gt_alpha_mask=None,
                           image_name=f"{idx}",uid=idx,data_device=torch.device("cuda"),time=time,
                           Znear=None, Zfar=None))
+            # if idx == 450:
+            #     snapshot = tracemalloc.take_snapshot()
+            #     top_stats = snapshot.statistics('lineno')
+            #     print("Top memory-consuming lines:")
+            #     for stat in top_stats[:10]:
+            #         print(stat)
+            #     import pdb
+            #     pdb.set_trace()
+            
+            # Clear variables and free up memory
+            del mask, depth, color
+            torch.cuda.empty_cache()  # Free up GPU memory
+            gc.collect()  # Run garbage collection
         return cameras
     
     def get_init_pts(self):

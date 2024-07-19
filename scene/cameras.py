@@ -45,7 +45,13 @@ class Camera(nn.Module):
         if gt_alpha_mask is not None:
             self.original_image *= gt_alpha_mask
         else:
+            # self.original_image *= torch.ones((1, self.image_height, self.image_width)).cuda()
             self.original_image *= torch.ones((1, self.image_height, self.image_width))
+
+        use_brdf_est = True #TODO put this in a config
+        if use_brdf_est:
+            self.preprocess_img_le()
+
         
         if Zfar is not None and Znear is not None:
             self.zfar = Zfar
@@ -65,6 +71,42 @@ class Camera(nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1)
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+    def preprocess_img_le(self):
+        """
+        Undistort images according to lightneus, second pass
+        """
+
+        channels, rows, cols = self.original_image.shape
+
+        #TODO: put below magic nums from calibration in conf
+        g= 2.0 # Autogain unknown for ct1a, estimates from 1 to 3
+        gamma = 2.2 # gamma correction, generally constant
+        k = 2.5 # decay power from emitted light
+        f = 767.45 # average of fx and fy, TODO compute differently in different directions
+        h = 1080
+        w = 1350
+        # (252,0) pixel coord varies between 160<alpha<170
+        p0 = np.array([252,0]) # point at corner of fov
+        pcenter = np.array([(h-1)/2, (w-1)/2])
+        centered_p0 = p0 - pcenter
+        fov = 165/2 # varies between 160 and 170 for this c3vd endoscope
+        alpha = fov/2
+        d = f * np.tan(alpha)
+        px_size = np.array([d*np.sin(alpha), d*np.cos(alpha)]) / centered_p0 # get pixel sizes, row/col correspond to y/x
+
+        # Compute alpha and then Le for every point based on pixel size
+        rows, cols = np.meshgrid(np.arange(w), np.arange(h))
+        row_dist = np.abs(rows - pcenter[0])
+        col_dist = np.abs(cols - pcenter[1])
+        dists = np.stack((row_dist, col_dist), axis=-1) * np.expand_dims(px_size, axis=(0,1))
+        dists = np.linalg.norm(dists, axis=2)
+        alpha = np.arctan2(dists, f)
+        Le = np.power(np.cos(alpha), k)
+
+        # Compute normalized image
+        Le = torch.from_numpy(Le[np.newaxis, :,:])
+        self.original_image.pow_(gamma).div_(Le * g)
 
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform, time):

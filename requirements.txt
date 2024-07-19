@@ -10,3 +10,5 @@ imageio-ffmpeg
 imageio
 open3d
 torchmetrics
+
+# git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
